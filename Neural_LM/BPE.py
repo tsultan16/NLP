@@ -20,7 +20,7 @@ class BPE():
         self.vocab = None
         self.merged_pairs = None
         self.subword2idx = None
-        self.word_tokens = None
+        self.word_tokens = {}
 
     # splits corpus into words, returns a dictionary of word frequencies
     def init_vocab_words(self, corpus):
@@ -57,19 +57,22 @@ class BPE():
         return pairs
 
     # merge a pair of tokens (token learner)
-    def merge_pair_learner(self, pair, word_freq, iter):
+    def merge_pair_learner(self, pair, word_freq):
         word_freq_new = collections.defaultdict(int)
-        pattern = " ".join(pair)
-        pattern_joined = "".join(pair) 
-        if not pair[1].endswith(self.eow_token):
-            pattern = pattern + " " # match whitespace at the end
-            pattern_joined = pattern_joined + " "  
-        pattern = re.escape(pattern) # special characters need to be escaped   
         for word, freq in word_freq.items():
             # merge all occurances of the pair in every word
-            word_new = re.sub(pattern, pattern_joined, word)
+            tokens = word.split()
+            i = 0
+            while i < len(tokens)-1:
+                if (tokens[i], tokens[i+1]) == pair:
+                    tokens[i:i+2] = ["".join(pair)]
+                else:    
+                    i += 1
+            word_new = " ".join(tokens) 
             word_freq_new[word_new] = freq
+
         return word_freq_new
+
 
     # learns a BPE subword vocabulary and merge rules from a given training corpus
     def learn(self, corpus):
@@ -86,7 +89,7 @@ class BPE():
             # get most frequent pair
             most_freq_pair = pairs.most_common(1)[0][0]
             # apply merger
-            word_freq = self.merge_pair_learner(most_freq_pair, word_freq, _)
+            word_freq = self.merge_pair_learner(most_freq_pair, word_freq)
             # add merged token to vocab
             vocab.add("".join(most_freq_pair))
             merged_pairs.append(most_freq_pair)
@@ -95,27 +98,33 @@ class BPE():
         self.vocab = sorted(list(vocab))
         self.merged_pairs = merged_pairs
         self.subword2idx = {t:i for i,t in enumerate(self.vocab)}
+        print("Done building vocab!")
 
+    def precompute_word_tokens(self, corpus):    
         # precompute tokenized words
         word_tokens = collections.defaultdict(list)
         pbar = tqdm(total=len(corpus), desc="Precomputing word tokenizations for corpus words--> ")
         for sentence in corpus:
             sentence_words = set(word_tokenize(sentence.strip()))
             for word in sentence_words:
-                word_tokens[word] = self.tokenize_word(word)   
+                if word not in word_tokens:
+                    word_tokens[word] = self.tokenize_word(word)   
             pbar.update(1)
         self.word_tokens = word_tokens
+        print("Done precomputing subword tokens for all words in corpus.")
 
     # merge a pair of tokens (token segmenter)
     def merge_pair_segmenter(self, pair, tokens):
-        pattern = " ".join(pair)
-        pattern_joined = "".join(pair) 
-        if not pair[1].endswith(self.eow_token):
-            pattern = pattern + " "
-            pattern_joined = pattern_joined + " "
-        pattern = re.escape(pattern)        
         # merge all occurances of the pair in every word
-        tokens_new = re.sub(pattern, pattern_joined, tokens)
+        split_tokens = tokens.split()
+        i = 0
+        while i < len(split_tokens)-1:
+            if (split_tokens[i], split_tokens[i+1]) == pair:
+                split_tokens[i:i+2] = ["".join(pair)]
+            else:    
+                i += 1
+        tokens_new = " ".join(split_tokens) 
+
         return tokens_new
 
     # encode a word into a list of BPE tokens
