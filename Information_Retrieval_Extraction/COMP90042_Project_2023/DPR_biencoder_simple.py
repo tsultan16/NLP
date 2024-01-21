@@ -21,14 +21,22 @@ class BERTBiEncoder(torch.nn.Module):
         for param in self.passage_encoder.parameters():
             param.requires_grad = True
 
-    def forward(self, query_idx, query_attn_mask, passage_idx, passage_attn_mask):
+    def forward(self, query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask):
         # compute BERT encodings, extract the `[CLS]` encoding (first element of the sequence), apply dropout        
-        passage_output = self.passage_encoder(passage_idx, attention_mask=passage_attn_mask)
-        passage_enc = self.dropout(passage_output.last_hidden_state[:,0]) # shape: (batch_size, hidden_size)
         query_output = self.query_encoder(query_idx, attention_mask=query_attn_mask)
         query_enc = self.dropout(query_output.last_hidden_state[:, 0]) # shape: (batch_size, hidden_size)
-        # compute similarity score matrix
-        scores = torch.mm(query_enc, passage_enc.transpose(0, 1)) # shape: (batch_size, batch_size)
+        pos_output = self.passage_encoder(pos_idx, attention_mask=pos_attn_mask)
+        pos_enc = self.dropout(pos_output.last_hidden_state[:,0]) # shape: (batch_size, hidden_size)
+        neg_output = self.passage_encoder(neg_idx, attention_mask=neg_attn_mask)
+        neg_enc = self.dropout(neg_output.last_hidden_state[:,0]) # shape: (batch_size, hidden_size)
+
+        # compute similarity score matrix for query and positives
+        scores_QP = torch.mm(query_enc, pos_enc.transpose(0, 1)) # shape: (batch_size, batch_size)
+        # compute similarity score matrix for query and negatives
+        scores_QN = torch.mm(query_enc, neg_enc.transpose(0, 1)) # shape: (batch_size, batch_size)
+        # concatenate the positive and negative scores
+        scores = torch.cat([scores_QP, scores_QN], dim=1) # shape: (batch_size, 2*batch_size)
+
         # compute cross-entropy loss
         loss = F.cross_entropy(scores, torch.arange(len(scores)).to(scores.device))
         return scores, loss
@@ -61,11 +69,11 @@ def train(model, optimizer, train_dataloader, val_dataloader, scheduler=None, de
         num_total = 0
         pbar = tqdm(train_dataloader, desc="Epochs")
         for i, batch in enumerate(pbar):
-            query_idx, query_attn_mask, passage_idx, passage_attn_mask = batch
+            query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask = batch
             # move batch to device
-            query_idx, query_attn_mask, passage_idx, passage_attn_mask = query_idx.to(device), query_attn_mask.to(device), passage_idx.to(device), passage_attn_mask.to(device)
+            query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask = query_idx.to(device), query_attn_mask.to(device), pos_idx.to(device), pos_attn_mask.to(device), neg_idx.to(device), neg_attn_mask.to(device)
             # forward pass
-            scores, loss = model(query_idx, query_attn_mask, passage_idx, passage_attn_mask )
+            scores, loss = model(query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask)
             # backward pass
             loss.backward()
             # apply gradient step 
@@ -115,9 +123,9 @@ def validation(model, val_dataloader, device="cpu"):
         num_correct = 0
         num_total = 0
         for i,batch in enumerate(val_dataloader):
-            query_idx, query_attn_mask, passage_idx, passage_attn_mask = batch
-            query_idx, query_attn_mask, passage_idx, passage_attn_mask = query_idx.to(device), query_attn_mask.to(device), passage_idx.to(device), passage_attn_mask.to(device)
-            scores, loss = model(query_idx, query_attn_mask, passage_idx, passage_attn_mask)
+            query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask = batch
+            query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask = query_idx.to(device), query_attn_mask.to(device), pos_idx.to(device), pos_attn_mask.to(device), neg_idx.to(device), neg_attn_mask.to(device)
+            scores, loss = model(query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask)
             B, _ = query_idx.shape
             y_pred = scores.argmax(dim=-1).view(-1) # shape (B,)
             targets = torch.arange(B).to(device) # shape (B,)
