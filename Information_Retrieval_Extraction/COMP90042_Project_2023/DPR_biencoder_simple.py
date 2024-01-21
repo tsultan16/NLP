@@ -38,7 +38,7 @@ class BERTBiEncoder(torch.nn.Module):
         scores = torch.cat([scores_QP, scores_QN], dim=1) # shape: (batch_size, 2*batch_size)
 
         # compute cross-entropy loss
-        loss = F.cross_entropy(scores, torch.arange(len(scores)).to(scores.device))
+        loss = F.cross_entropy(scores, torch.arange(scores.shape[0]).to(scores.device))
         return scores, loss
     
     @ torch.no_grad()
@@ -113,7 +113,7 @@ def train(model, optimizer, train_dataloader, val_dataloader, scheduler=None, de
 
         if save_every is not None:
             if (epoch+1) % save_every == 0:
-                save_model_checkpoint(model, optimizer, epoch, avg_loss)
+                save_dpr_model_checkpoint(model, optimizer, epoch, avg_loss)
 
 
 def validation(model, val_dataloader, device="cpu"):
@@ -137,7 +137,7 @@ def validation(model, val_dataloader, device="cpu"):
     val_accuracy = num_correct / num_total
     return val_loss, val_accuracy
 
-def save_model_checkpoint(model, optimizer, epoch=None, loss=None, filename=None):
+def save_dpr_model_checkpoint(model, optimizer, epoch=None, loss=None, filename=None):
     # Save the model and optimizer state_dict
     checkpoint = {
         'epoch': epoch,
@@ -153,13 +153,16 @@ def save_model_checkpoint(model, optimizer, epoch=None, loss=None, filename=None
     print(f"Saved model checkpoint!")
 
 
-def load_model_checkpoint(model, optimizer, filename=None):
+def load_dpr_model_checkpoint(model, optimizer=None, filename=None):
     if filename:
         checkpoint = torch.load(filename)
     else:
         checkpoint = torch.load('dpr_checkpoint.pth')
     model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    model.train()
     print("Loaded model from checkpoint!")
-    return model, optimizer          
+    if optimizer:
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        model.train()
+        return model, optimizer          
+    else:
+        return model
