@@ -8,7 +8,7 @@ import pickle
 import random
 
 # loads and cleans the claims dataset
-def load_data(clean=False):
+def load_data(clean=False, clean_threshold=20):
     # load the evidence passages
     with open("project-data/evidence.json", "r") as train_file:
         document_store = json.load(train_file)         
@@ -38,7 +38,7 @@ def load_data(clean=False):
         claim_evidence_list = claim_evidence_list + [claim['evidences'] for claim in val_data.values()]
         claim_evidence_list = list(set([evidence for evidence_list in claim_evidence_list for evidence in evidence_list]))
 
-        document_store = {i: evidence_text for i, evidence_text in document_store_no_duplicates.items() if len(evidence_text) >= 30 or i in claim_evidence_list}
+        document_store = {i: evidence_text for i, evidence_text in document_store_no_duplicates.items() if len(evidence_text) >= clean_threshold or i in claim_evidence_list}
         print(f"Number of evidence passages remaining after cleaning: {len(document_store)}")
     
     return document_store, train_data, val_data    
