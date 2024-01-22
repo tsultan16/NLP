@@ -9,9 +9,8 @@ from tqdm import tqdm
 
 # uses in-batch negatives
 class BERTBiEncoder(torch.nn.Module):
-    def __init__(self, dropout_rate=0.1, out_of_batch_negs=False, use_separete_encoders=False):
+    def __init__(self, dropout_rate=0.1, use_separete_encoders=False):
         super().__init__()
-        self.out_of_batch_negs = out_of_batch_negs
         # load pretrained BERT model
         self.query_encoder = DistilBertModel.from_pretrained('distilbert-base-uncased')
         if use_separete_encoders:
@@ -31,29 +30,16 @@ class BERTBiEncoder(torch.nn.Module):
         query_enc = self.dropout(query_output.last_hidden_state[:, 0]) # shape: (batch_size, hidden_size)
         pos_output = self.passage_encoder(pos_idx, attention_mask=pos_attn_mask)
         pos_enc = self.dropout(pos_output.last_hidden_state[:,0]) # shape: (batch_size, hidden_size)
-        
-        if not self.out_of_batch_negs:
-            neg_output = self.passage_encoder(neg_idx, attention_mask=neg_attn_mask)
-            neg_enc = self.dropout(neg_output.last_hidden_state[:,0]) # shape: (batch_size, hidden_size)
-            # compute similarity score matrix for query and positives
-            scores_QP = torch.mm(query_enc, pos_enc.transpose_(0, 1)) # shape: (batch_size, batch_size)
-            # compute similarity score matrix for query and negatives
-            scores_QN = torch.mm(query_enc, neg_enc.transpose_(0, 1)) # shape: (batch_size, batch_size)
-            # concatenate the positive and negative scores
-            scores = torch.cat([scores_QP, scores_QN], dim=1) # shape: (batch_size, 2*batch_size)
-            # compute cross-entropy loss
-            loss = F.cross_entropy(scores, torch.arange(scores.shape[0]).to(scores.device))
-        else:
-            neg_output = self.passage_encoder(neg_idx, attention_mask=neg_attn_mask)
-            neg_enc = self.dropout(neg_output.last_hidden_state[:,0]) # shape: (batch_size*num_negatives, hidden_size)
-            # compute similarity score matrix for every query-positive pair
-            scores_QP = torch.mm(query_enc, pos_enc.transpose_(0, 1)) # shape: (batch_size, batch_size)
-            # compute similarity score matrix for every query-negative pair
-            scores_QN = torch.mm(query_enc, neg_enc.transpose_(0, 1)) # shape: (batch_size, batch_size*num_negatives)            
-            # concatenate the positive and negative scores
-            scores = torch.cat([scores_QP, scores_QN], dim=1) # shape: (batch_size, batch_size+batch_size*num_negatives)
-            # compute cross-entropy loss
-            loss = F.cross_entropy(scores, torch.arange(scores.shape[0]).to(scores.device))
+        neg_output = self.passage_encoder(neg_idx, attention_mask=neg_attn_mask)
+        neg_enc = self.dropout(neg_output.last_hidden_state[:,0]) # shape: (batch_size*num_negatives, hidden_size)
+        # compute similarity score matrix for every query-positive pair
+        scores_QP = torch.mm(query_enc, pos_enc.transpose_(0, 1)) # shape: (batch_size, batch_size)
+        # compute similarity score matrix for every query-negative pair (these are out of batch negatives) 
+        scores_QN = torch.mm(query_enc, neg_enc.transpose_(0, 1)) # shape: (batch_size, batch_size*num_negatives)            
+        # concatenate the positive and negative scores
+        scores = torch.cat([scores_QP, scores_QN], dim=1) # shape: (batch_size, batch_size+batch_size*num_negatives)
+        # compute cross-entropy loss
+        loss = F.cross_entropy(scores, torch.arange(scores.shape[0]).to(scores.device))
 
         return scores, loss
     
