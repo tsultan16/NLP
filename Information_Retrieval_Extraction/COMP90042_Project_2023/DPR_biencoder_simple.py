@@ -9,26 +9,27 @@ from tqdm import tqdm
 
 # uses in-batch negatives
 class BERTBiEncoder(torch.nn.Module):
-    def __init__(self, dropout_rate=0.1):
+    def __init__(self, dropout_rate=0.1, out_of_batch_negs=False):
         super().__init__()
         # load pretrained BERT model
         self.query_encoder = DistilBertModel.from_pretrained('distilbert-base-uncased')
         self.passage_encoder = DistilBertModel.from_pretrained('distilbert-base-uncased')
         self.dropout = torch.nn.Dropout(dropout_rate)
+        self.out_of_batch_negs = out_of_batch_negs
 
         for param in self.query_encoder.parameters():
             param.requires_grad = True
         for param in self.passage_encoder.parameters():
             param.requires_grad = True
 
-    def forward(self, query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask, out_of_batch_negs=False):
+    def forward(self, query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask):
         # compute BERT encodings, extract the `[CLS]` encoding (first element of the sequence), apply dropout        
         query_output = self.query_encoder(query_idx, attention_mask=query_attn_mask)
         query_enc = self.dropout(query_output.last_hidden_state[:, 0]) # shape: (batch_size, hidden_size)
         pos_output = self.passage_encoder(pos_idx, attention_mask=pos_attn_mask)
         pos_enc = self.dropout(pos_output.last_hidden_state[:,0]) # shape: (batch_size, hidden_size)
         
-        if not out_of_batch_negs:
+        if not self.out_of_batch_negs:
             neg_output = self.passage_encoder(neg_idx, attention_mask=neg_attn_mask)
             neg_enc = self.dropout(neg_output.last_hidden_state[:,0]) # shape: (batch_size, hidden_size)
             # compute similarity score matrix for query and positives
