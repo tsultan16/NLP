@@ -33,9 +33,9 @@ class BERTBiEncoder(torch.nn.Module):
             neg_output = self.passage_encoder(neg_idx, attention_mask=neg_attn_mask)
             neg_enc = self.dropout(neg_output.last_hidden_state[:,0]) # shape: (batch_size, hidden_size)
             # compute similarity score matrix for query and positives
-            scores_QP = torch.mm(query_enc, pos_enc.transpose(0, 1)) # shape: (batch_size, batch_size)
+            scores_QP = torch.mm(query_enc, pos_enc.transpose_(0, 1)) # shape: (batch_size, batch_size)
             # compute similarity score matrix for query and negatives
-            scores_QN = torch.mm(query_enc, neg_enc.transpose(0, 1)) # shape: (batch_size, batch_size)
+            scores_QN = torch.mm(query_enc, neg_enc.transpose_(0, 1)) # shape: (batch_size, batch_size)
             # concatenate the positive and negative scores
             scores = torch.cat([scores_QP, scores_QN], dim=1) # shape: (batch_size, 2*batch_size)
             # compute cross-entropy loss
@@ -45,9 +45,14 @@ class BERTBiEncoder(torch.nn.Module):
             neg_enc = self.dropout(neg_output.last_hidden_state[:,0]) # shape: (batch_size*num_negatives, hidden_size)
             # reshape negative passages back to (batch_size, num_negatives, hidden_size)
             neg_enc = neg_enc.view(query_enc.shape[0], -1, neg_enc.shape[-1])
+            
             # compute similarity scores between each query in batch with its positive and negative passages
             scores_QP = torch.bmm(query_enc.unsqueeze(1), pos_enc.unsqueeze(-1)).squeeze(-1) # shape: (batch_size, 1, hidden_size) x (batch_size, hidden_size, 1) = (batch_size, 1, 1) -> (batch_size, 1)
-            scores_QN = torch.bmm(query_enc.unsqueeze(1), neg_enc.transpose(1, 2)).squeeze(1) # shape: (batch_size, 1, hidden_size) x (batch_size, hidden_size, num_negatives) = (batch_size, 1, num_negatives) -> (batch_size, num_negatives)
+            scores_QN = torch.bmm(query_enc.unsqueeze(1), neg_enc.transpose_(1, 2)).squeeze(1) # shape: (batch_size, 1, hidden_size) x (batch_size, hidden_size, num_negatives) = (batch_size, 1, num_negatives) -> (batch_size, num_negatives)
+            
+            #scores_QP = torch.einsum('bi,bi->b', query_enc, pos_enc).view(-1,1)  # shape: (batch_size,1)
+            #scores_QN = torch.einsum('bi,bni->bn', query_enc, neg_enc)  # shape: (batch_size, num_negatives)
+
             # concatenate the positive and negative scores
             scores = torch.cat([scores_QP, scores_QN], dim=1) # shape: (batch_size, 1+num_negatives)
             # compute cross-entropy loss
@@ -116,7 +121,7 @@ def train(model, optimizer, train_dataloader, val_dataloader, scheduler=None, de
             pbar.set_description(f"Epoch {epoch + 1}, EMA Train Loss: {avg_loss:.3f}, Train Accuracy: {train_acc: .3f}, Val Loss: {val_loss: .3f}, Val Accuracy: {val_acc: .3f}")  
 
             if log_metrics:
-                metrics = {"Batch loss" : loss.item(), "Moving Avg Loss" : avg_loss, "Val Loss": val_loss}
+                metrics = {"Batch loss":loss.item(), "Moving Avg Loss":avg_loss, "Train Accuracy":train_acc, "Val Loss": val_loss, "Val Accuracy":val_acc}
                 log_metrics(metrics)
 
         # run optimizer step for remainder batches
