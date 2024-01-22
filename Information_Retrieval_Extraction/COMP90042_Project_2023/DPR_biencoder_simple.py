@@ -9,14 +9,17 @@ from tqdm import tqdm
 
 # uses in-batch negatives
 class BERTBiEncoder(torch.nn.Module):
-    def __init__(self, dropout_rate=0.1, out_of_batch_negs=False):
+    def __init__(self, dropout_rate=0.1, out_of_batch_negs=False, use_separete_encoders=False):
         super().__init__()
+        self.out_of_batch_negs = out_of_batch_negs
         # load pretrained BERT model
         self.query_encoder = DistilBertModel.from_pretrained('distilbert-base-uncased')
-        self.passage_encoder = DistilBertModel.from_pretrained('distilbert-base-uncased')
-        self.dropout = torch.nn.Dropout(dropout_rate)
-        self.out_of_batch_negs = out_of_batch_negs
+        if use_separete_encoders:
+            self.passage_encoder = DistilBertModel.from_pretrained('distilbert-base-uncased')
+        else:
+            self.passage_encoder = self.query_encoder 
 
+        self.dropout = torch.nn.Dropout(dropout_rate)
         for param in self.query_encoder.parameters():
             param.requires_grad = True
         for param in self.passage_encoder.parameters():
