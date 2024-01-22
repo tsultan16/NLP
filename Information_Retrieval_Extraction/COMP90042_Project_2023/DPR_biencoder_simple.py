@@ -41,9 +41,6 @@ class BERTBiEncoder(torch.nn.Module):
             # compute cross-entropy loss
             loss = F.cross_entropy(scores, torch.arange(scores.shape[0]).to(scores.device))
         else:
-            # reshape negative passages to (batch_size*num_negatives, max_seq_len)
-            neg_idx = neg_idx.view(-1, neg_idx.shape[-1])
-            neg_attn_mask = neg_attn_mask.view(-1, neg_attn_mask.shape[-1])
             neg_output = self.passage_encoder(neg_idx, attention_mask=neg_attn_mask)
             neg_enc = self.dropout(neg_output.last_hidden_state[:,0]) # shape: (batch_size*num_negatives, hidden_size)
             # reshape negative passages back to (batch_size, num_negatives, hidden_size)
@@ -86,7 +83,7 @@ def train(model, optimizer, train_dataloader, val_dataloader, scheduler=None, de
     for epoch in range(num_epochs):
         num_correct = 0
         num_total = 0
-        pbar = tqdm(train_dataloader, desc="Epochs")
+        pbar = tqdm(train_dataloader, desc="Train Epochs")
         for i, batch in enumerate(pbar):
             query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask = batch
             # move batch to device
@@ -111,7 +108,7 @@ def train(model, optimizer, train_dataloader, val_dataloader, scheduler=None, de
             train_acc = num_correct / num_total        
 
             if val_every is not None:
-                if i%val_every == 0:
+                if (i+1)%val_every == 0:
                     # compute validation loss
                     val_loss, val_acc = validation(model, val_dataloader, device=device)
                     pbar.set_description(f"Epoch {epoch + 1}, EMA Train Loss: {avg_loss:.3f}, Train Accuracy: {train_acc: .3f}, Val Loss: {val_loss: .3f}, Val Accuracy: {val_acc: .3f}")  
@@ -141,7 +138,8 @@ def validation(model, val_dataloader, device="cpu"):
     with torch.no_grad():
         num_correct = 0
         num_total = 0
-        for i,batch in enumerate(val_dataloader):
+        pbar = tqdm(val_dataloader, desc="Val Epochs")
+        for i,batch in enumerate(pbar):
             query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask = batch
             query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask = query_idx.to(device), query_attn_mask.to(device), pos_idx.to(device), pos_attn_mask.to(device), neg_idx.to(device), neg_attn_mask.to(device)
             scores, loss = model(query_idx, query_attn_mask, pos_idx, pos_attn_mask, neg_idx, neg_attn_mask)
