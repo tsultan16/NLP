@@ -43,22 +43,12 @@ class BERTBiEncoder(torch.nn.Module):
         else:
             neg_output = self.passage_encoder(neg_idx, attention_mask=neg_attn_mask)
             neg_enc = self.dropout(neg_output.last_hidden_state[:,0]) # shape: (batch_size*num_negatives, hidden_size)
-            # reshape negative passages back to (batch_size, num_negatives, hidden_size)
-            neg_enc = neg_enc.view(query_enc.shape[0], -1, neg_enc.shape[-1])
-            
-            # compute similarity scores between each query in batch with its positive passage
-            # scores_QP = torch.bmm(query_enc.unsqueeze(1), pos_enc.unsqueeze(-1)).squeeze(-1) # shape: (batch_size, 1, hidden_size) x (batch_size, hidden_size, 1) = (batch_size, 1, 1) -> (batch_size, 1)
-             
             # compute similarity score matrix for every query-positive pair
             scores_QP = torch.mm(query_enc, pos_enc.transpose_(0, 1)) # shape: (batch_size, batch_size)
-            # compute similarity scores between each query in batch with its negative passages
-            scores_QN = torch.bmm(query_enc.unsqueeze(1), neg_enc.transpose_(1, 2)).squeeze(1) # shape: (batch_size, 1, hidden_size) x (batch_size, hidden_size, num_negatives) = (batch_size, 1, num_negatives) -> (batch_size, num_negatives)
-            
-            #scores_QP = torch.einsum('bi,bi->b', query_enc, pos_enc).view(-1,1)  # shape: (batch_size,1)
-            #scores_QN = torch.einsum('bi,bni->bn', query_enc, neg_enc)  # shape: (batch_size, num_negatives)
-
+            # compute similarity score matrix for every query-negative pair
+            scores_QN = torch.mm(query_enc, neg_enc.transpose_(0, 1)) # shape: (batch_size, batch_size*num_negatives)            
             # concatenate the positive and negative scores
-            scores = torch.cat([scores_QP, scores_QN], dim=1) # shape: (batch_size, batch_size+num_negatives)
+            scores = torch.cat([scores_QP, scores_QN], dim=1) # shape: (batch_size, batch_size+batch_size*num_negatives)
             # compute cross-entropy loss
             loss = F.cross_entropy(scores, torch.arange(scores.shape[0]).to(scores.device))
 
