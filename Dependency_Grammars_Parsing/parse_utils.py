@@ -150,8 +150,8 @@ def training_oracle(data_instance, return_states=False, max_iters=100, verbose=F
     return states, actions, labels, sentence_words    
 
 
-
 class DependencyParseDataset(Dataset):
+    
     def __init__(self, sentences, state_action_label, action2idx, label2idx, block_size=256):
         self.sentences = sentences
         self.state_action_label = state_action_label
@@ -163,23 +163,23 @@ class DependencyParseDataset(Dataset):
     def __len__(self):
         return len(self.sentences)
     
-    def __getitem__(self, idx):
-        # get sentence 
-        sentence = self.sentences[idx]
-        # get states, actions, and labels
-        states, actions, labels = self.state_action_label[idx]
-
-        assert len(states) == len(actions) == len(labels), "Lengths of states, actions, and labels do not match."
-
-        # tokenize the sentence
+    def tokenize_sentence(self, sentence):
         input_encoding = self.tokenizer.encode_plus(sentence, is_split_into_words=True, return_offsets_mapping=False, padding=False, truncation=False, add_special_tokens=True)
         input_idx = input_encoding['input_ids']
         word_ids = input_encoding.word_ids()
-
         if len(input_idx) > self.block_size:
-            raise ValueError(f"Tokenized sentence {idx} is too long: {len(input_idx)}. Truncation unsupported.")
+            raise ValueError(f"Tokenized sentence is too long: {len(input_idx)}. Truncation unsupported.")
+        # add padding 
+        input_idx = input_idx + [self.tokenizer.pad_token_id] * (self.block_size - len(input_idx))    
+        # create attention mask 
+        input_attn_mask = [1 if idx != self.tokenizer.pad_token_id else 0 for idx in input_idx]
+        # convert to tensors
+        input_idx = torch.tensor(input_idx)
+        input_attn_mask = torch.tensor(input_attn_mask) 
 
-        # map state words to index of first subword token
+        return input_idx, input_attn_mask, word_ids
+
+    def tokenize_state(self, states, word_ids):
         state_idx = []
         for stack_words, buffer_word in states:
             state_words_idx = [self.tokenizer.pad_token_id] * 3  # missing words are filled with PAD token
@@ -193,21 +193,24 @@ class DependencyParseDataset(Dataset):
                 state_words_idx[2] = word_ids.index(buffer_word[1]-1)
             
             state_idx.append(state_words_idx)
+        return state_idx    
 
+    def __getitem__(self, idx):
+        # get sentence 
+        sentence = self.sentences[idx]
+        # get states, actions, and labels
+        states, actions, labels = self.state_action_label[idx]
+        assert len(states) == len(actions) == len(labels), "Lengths of states, actions, and labels do not match."
+        # tokenize the sentence
+        input_idx, input_attn_mask, word_ids = self.tokenize_sentence(sentence)
+        # map state words to index of first subword token
+        state_idx = self.tokenize_state(states, word_ids)
         # map actions and labels to indices
         action_idx = [self.action2idx[a] for a in actions]
         label_idx = [self.label2idx[l] for l in labels]    
 
-        # add padding 
-        input_idx = input_idx + [self.tokenizer.pad_token_id] * (self.block_size - len(input_idx))    
-        # create attention mask 
-        input_attn_mask = [1 if idx != self.tokenizer.pad_token_id else 0 for idx in input_idx]
-
-        # convert to tensors
-        input_idx = torch.tensor(input_idx)
-        input_attn_mask = torch.tensor(input_attn_mask) 
-        
         return input_idx, input_attn_mask, state_idx, action_idx, label_idx   
+
 
 def collate_fn(batch):
     # Separate the tensors and the dictionaries
@@ -263,10 +266,14 @@ class BERT_ORACLE(torch.nn.Module):
         features = torch.stack(features_states) # shape: (num_states, 3*hidden_size)   
         return features
 
-    def forward(self, input_idx, input_attn_mask, state_idx, target_action_idx=None, target_label_idx=None):
-        # compute BERT embeddings for input tokens
+    def get_bert_encoding(self, input_idx, input_attn_mask):
         bert_output = self.bert_encoder(input_idx, attention_mask=input_attn_mask)
         bert_output = self.dropout(bert_output.last_hidden_state) # shape: (batch_size, block_size, hidden_size)
+        return bert_output
+
+    def forward(self, input_idx, input_attn_mask, state_idx, target_action_idx=None, target_label_idx=None):
+        # compute BERT embeddings for input tokens
+        bert_output = self.get_bert_encoding(input_idx, input_attn_mask)
 
         loss = 0.0
         batch_action_logits = []
@@ -293,6 +300,25 @@ class BERT_ORACLE(torch.nn.Module):
         loss = loss/len(input_idx)    
 
         return loss, batch_action_logits, batch_label_logits    
+
+    @torch.no_grad()
+    def predict(self, bert_output, state_idx):
+        batch_action_logits = []
+        batch_label_logits = []
+        # iterate over each sentence in the batch
+        for batch_idx in range(len(state_idx)):  
+            # get the features for all parse states
+            features = self.get_features(bert_output, state_idx, batch_idx) # shape: (num_states, 3*hidden_size)
+            # compute action logits and cross-entropy loss
+            action_logits = self.classifier_head_action(features) # shape: (num_states, num_actions)
+            batch_action_logits.append(action_logits)
+            if not self.unlabeled_arcs:
+                # compute arc-label logits and cross-entropy loss 
+                label_logits = self.classifier_head_label(features) # shape: (num_states, num_labels)
+                batch_label_logits.append(label_logits)
+   
+        return batch_action_logits, batch_label_logits  
+
 
 # training loop
 def train(model, optimizer, train_dataloader, val_dataloader, scheduler=None, device="cpu", num_epochs=10, val_every=100, save_every=None, log_metrics=None):
@@ -366,14 +392,14 @@ def train(model, optimizer, train_dataloader, val_dataloader, scheduler=None, de
                 save_model_checkpoint(model, optimizer, epoch, avg_loss)
 
 
-def validation(model, val_dataloader, device="cpu"):
+def validation(model, dataloader, device="cpu"):
     model.eval()
-    val_losses = torch.zeros(len(val_dataloader))
+    val_losses = torch.zeros(len(dataloader))
     with torch.no_grad():
         val_uas = 0
         val_las = 0
         num_instances = 0
-        for step,batch in enumerate(val_dataloader):
+        for step,batch in enumerate(dataloader):
             input_idx, input_attn_mask, state_idx, target_action_idx, target_label_idx = batch
             input_idx, input_attn_mask = input_idx.to(device), input_attn_mask.to(device)
             loss, batch_action_logits, batch_label_logits = model(input_idx, input_attn_mask, state_idx, target_action_idx, target_label_idx)
