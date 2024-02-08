@@ -147,7 +147,7 @@ def training_oracle(data_instance, return_states=False, max_iters=100, verbose=F
     if niters == max_iters:
         print("Maximum number of iterations reached!")  
 
-    return states, actions, labels, sentence_words    
+    return states, actions, labels, sentence_words, Rc    
 
 
 class DependencyParseDataset(Dataset):
